@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "moggsync",
+  "version": "1.0.0",
+  "name": "MoggSync",
+  "environment": "client",
+  "entrypoints": { "client": ["com.example.moggsync.MoggSyncClient"] },
+  "depends": {
+    "fabricloader": ">=0.16.9",
+    "minecraft": "~1.21.4",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
