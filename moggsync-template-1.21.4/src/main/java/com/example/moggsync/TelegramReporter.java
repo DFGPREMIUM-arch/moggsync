@@ -79,10 +79,14 @@ public final class TelegramReporter {
         }
     }
 
-    public static void sendMessage(MoggConfig c, String text) {
+    public static void sendMessage(MoggConfig c, String text) { sendMessage(c, text, false); }
+
+    /** silent = без звука уведомления (для потока сообщений чата). */
+    public static void sendMessage(MoggConfig c, String text, boolean silent) {
         if (!ready(c)) return;
         String body = "chat_id=" + URLEncoder.encode(c.CHAT_ID, StandardCharsets.UTF_8)
-                + "&text=" + URLEncoder.encode(text, StandardCharsets.UTF_8);
+                + "&text=" + URLEncoder.encode(text, StandardCharsets.UTF_8)
+                + (silent ? "&disable_notification=true" : "");
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create("https://api.telegram.org/bot" + c.TELEGRAM_BOT_TOKEN + "/sendMessage"))
                 .timeout(Duration.ofSeconds(20))
