@@ -1,6 +1,9 @@
 package com.example.moggsync;
 
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.render.RenderTickCounter;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -460,7 +463,7 @@ public class MoggSyncClient implements ClientModInitializer {
         reconnectAnnounced = false;
         reconnectTries = 0;
         loginPending=false;deathSeen=false;prevDead=false;pendingDeathTp=false;
-        joinCmdIdx=0;nextJoinCmdAt=now+cfg.lobbyJoinDelayMs+1500;
+        joinCmdIdx=0;nextJoinCmdAt=System.currentTimeMillis()+cfg.lobbyJoinDelayMs+1500;
         if (!isActive()) return;
         releaseSneak();
         ritual = Ritual.IDLE;
@@ -508,7 +511,8 @@ public class MoggSyncClient implements ClientModInitializer {
     private void tickDeath(MinecraftClient mc,long now){
         if(mc.player==null)return;boolean dead=mc.player.isDead()||mc.currentScreen instanceof DeathScreen;
         if(dead&&!prevDead){deathSeen=true;if(cfg.pauseOnDeath){releaseSneak();ritual=Ritual.IDLE;nextSyncAt=0;pendingPhraseAt=0;}if(cfg.autoRespawn)respawnClickAt=now+cfg.respawnDelayMs;if(cfg.notifyDeathTg){String srv=mc.getCurrentServerEntry()!=null?mc.getCurrentServerEntry().address:"?";TelegramReporter.sendMessage(cfg,"💀 "+myName()+" погиб на "+srv+(cfg.autoRespawn?" — авто-возрождение через "+cfg.respawnDelayMs/1000+" с":""));}}
-        if(deathSeen&&cfg.autoRespawn&&respawnClickAt>0&&now>=respawnClickAt){respawnClickAt=0;if(mc.player!=null)try{mc.player.networkHandler.sendPacket(new ClientCommandC2SPacket(mc.player,ClientCommandC2SPacket.Mode.PERFORM_RESPAWN));}catch(Exception e){LOGGER.warn("Respawn fail: {}",e.getClass().getSimpleName());}}
+        if(deathSeen&&cfg.autoRespawn&&respawnClickAt>0&&now>=respawnClickAt){respawnClickAt=0;if(mc.player!=null)try{mc.player.networkHandler.sendPacket(
+                            new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.values()[0]));}catch(Exception e){LOGGER.warn("Respawn fail: {}",e.getClass().getSimpleName());}}
         if(prevDead&&!dead&&deathSeen){deathSeen=false;LOGGER.info("Respawned");if(!cfg.deathTeleportCmd.isBlank()){pendingDeathTp=true;deathTpAt=now+cfg.deathTeleportDelayMs;}else if(cfg.pauseOnDeath)armTimer();}
         if(pendingDeathTp&&now>=deathTpAt&&mc.player!=null&&!dead){pendingDeathTp=false;say(cfg.deathTeleportCmd);if(cfg.pauseOnDeath)armTimer();}
         prevDead=dead;
