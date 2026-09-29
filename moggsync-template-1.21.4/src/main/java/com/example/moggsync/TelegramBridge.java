@@ -63,8 +63,12 @@ public final class TelegramBridge {
         HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).timeout(Duration.ofSeconds(40)).GET().build();
         HttpResponse<String> r = HTTP.send(req, HttpResponse.BodyHandlers.ofString());
 
-        if (r.statusCode() == 409) {           // тот же бот уже опрашивает другой ПК
-            MoggSyncClient.LOGGER.warn("Telegram 409: этот бот уже используется другим клиентом. Нужен отдельный бот на каждый ПК.");
+        if (r.statusCode() == 409) {           // другой ПК опрашивает бота, либо на боте висит webhook
+            try {
+                HTTP.send(HttpRequest.newBuilder().uri(URI.create("https://api.telegram.org/bot" + c.TELEGRAM_BOT_TOKEN + "/deleteWebhook"))
+                        .timeout(Duration.ofSeconds(15)).GET().build(), HttpResponse.BodyHandlers.discarding());
+            } catch (Exception ignored) {}
+            MoggSyncClient.LOGGER.warn("Telegram 409: бот занят другим клиентом (нужен отдельный бот на каждый ПК).");
             sleepQuiet(15000);
             return;
         }

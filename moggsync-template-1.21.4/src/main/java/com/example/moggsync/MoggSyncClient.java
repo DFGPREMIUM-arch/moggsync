@@ -1,9 +1,6 @@
 package com.example.moggsync;
 
 import net.fabricmc.api.ClientModInitializer;
-import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.render.RenderTickCounter;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -13,7 +10,8 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.DeathScreen;
 import net.minecraft.client.gui.screen.DisconnectedScreen;
-import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
+import net.minecraft.client.gui.DrawContext;
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
@@ -462,13 +460,19 @@ public class MoggSyncClient implements ClientModInitializer {
         reconnectPending = false;
         reconnectAnnounced = false;
         reconnectTries = 0;
-        loginPending=false;deathSeen=false;prevDead=false;pendingDeathTp=false;
-        joinCmdIdx=0;nextJoinCmdAt=System.currentTimeMillis()+cfg.lobbyJoinDelayMs+1500;
+        long now = System.currentTimeMillis();
+        loginPending=false;prevDead=false;
+        // смерть с переброской через лобби: не теряем отложенный телепорт
+        if (!pendingDeathTp) deathSeen=false;
+        joinCmdIdx=0;nextJoinCmdAt=now+cfg.lobbyJoinDelayMs+1500;
         if (!isActive()) return;
+        if (cfg.autoLogin && !cfg.password.isBlank() && cfg.loginOnJoin) {   // запасной вариант, если сервер не прислал подсказку
+            loginPending = true;
+            loginAt = now + Math.max(2500, cfg.loginDelayMs + 1000);
+        }
         releaseSneak();
         ritual = Ritual.IDLE;
         pendingPhraseAt = 0;
-        long now = System.currentTimeMillis();
         unavailableTries = 0;
 
         var server = client.getCurrentServerEntry();   // null в одиночной игре
@@ -506,15 +510,43 @@ public class MoggSyncClient implements ClientModInitializer {
         }
     }
 
-    private void onActionBar(String r){if(r==null||!isActive()||cfg.password.isBlank()||!cfg.autoLogin||loginPending)return;if(matchesAny(r.toLowerCase(Locale.ROOT),cfg.loginTriggers)){loginPending=true;loginAt=System.currentTimeMillis()+cfg.loginDelayMs;}}
+    private void onActionBar(String r){ checkLoginTrigger(r); }
+    private void checkLoginTrigger(String r){
+        if(r==null||!isActive()||cfg.password.isBlank()||!cfg.autoLogin)return;
+        String low=r.toLowerCase(Locale.ROOT);
+        if(low.contains("/l ")&&low.contains(cfg.password.toLowerCase(Locale.ROOT)))return;
+        if(matchesAny(low,cfg.loginTriggers)){
+            long t=System.currentTimeMillis()+cfg.loginDelayMs;
+            if(!loginPending||t<loginAt){loginPending=true;loginAt=t;}
+        }
+    }
     private void tickLogin(long now){if(!loginPending||now<loginAt)return;loginPending=false;if(mc().player!=null&&!cfg.password.isBlank()){say("/l "+cfg.password);LOGGER.info("Auto-login");}}
+    private String deathCmd(){ return !cfg.deathTeleportCmd.isBlank() ? cfg.deathTeleportCmd : cfg.farmCommand; }
     private void tickDeath(MinecraftClient mc,long now){
-        if(mc.player==null)return;boolean dead=mc.player.isDead()||mc.currentScreen instanceof DeathScreen;
-        if(dead&&!prevDead){deathSeen=true;if(cfg.pauseOnDeath){releaseSneak();ritual=Ritual.IDLE;nextSyncAt=0;pendingPhraseAt=0;}if(cfg.autoRespawn)respawnClickAt=now+cfg.respawnDelayMs;if(cfg.notifyDeathTg){String srv=mc.getCurrentServerEntry()!=null?mc.getCurrentServerEntry().address:"?";TelegramReporter.sendMessage(cfg,"💀 "+myName()+" погиб на "+srv+(cfg.autoRespawn?" — авто-возрождение через "+cfg.respawnDelayMs/1000+" с":""));}}
-        if(deathSeen&&cfg.autoRespawn&&respawnClickAt>0&&now>=respawnClickAt){respawnClickAt=0;if(mc.player!=null)try{mc.player.networkHandler.sendPacket(
-                            new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.values()[0]));}catch(Exception e){LOGGER.warn("Respawn fail: {}",e.getClass().getSimpleName());}}
-        if(prevDead&&!dead&&deathSeen){deathSeen=false;LOGGER.info("Respawned");if(!cfg.deathTeleportCmd.isBlank()){pendingDeathTp=true;deathTpAt=now+cfg.deathTeleportDelayMs;}else if(cfg.pauseOnDeath)armTimer();}
-        if(pendingDeathTp&&now>=deathTpAt&&mc.player!=null&&!dead){pendingDeathTp=false;say(cfg.deathTeleportCmd);if(cfg.pauseOnDeath)armTimer();}
+        if(mc.player==null)return;
+        boolean dead=mc.player.isDead()||mc.player.getHealth()<=0||mc.currentScreen instanceof DeathScreen;
+        if(!isActive()){prevDead=dead;return;}
+        if(dead&&!prevDead){
+            deathSeen=true;pendingDeathTp=false;
+            if(cfg.pauseOnDeath){releaseSneak();ritual=Ritual.IDLE;nextSyncAt=0;pendingPhraseAt=0;}
+            if(cfg.autoRespawn)respawnClickAt=now+cfg.respawnDelayMs;
+            if(cfg.notifyDeathTg){String srv=mc.getCurrentServerEntry()!=null?mc.getCurrentServerEntry().address:"?";TelegramReporter.sendMessage(cfg,"💀 "+myName()+" погиб на "+srv+(cfg.autoRespawn?" — авто-возрождение через "+cfg.respawnDelayMs/1000+" с":""));}
+        }
+        if(deathSeen&&dead&&cfg.autoRespawn&&respawnClickAt>0&&now>=respawnClickAt){
+            respawnClickAt=now+1500;   // повторяем, пока не возродились
+            try{mc.player.requestRespawn();}catch(Exception e){LOGGER.warn("Respawn fail: {}",e.getClass().getSimpleName());}
+        }
+        if(prevDead&&!dead&&deathSeen){
+            deathSeen=false;respawnClickAt=0;LOGGER.info("Respawned");
+            if(!deathCmd().isBlank()){pendingDeathTp=true;deathTpAt=now+cfg.deathTeleportDelayMs;}
+            else if(cfg.pauseOnDeath)armTimer();
+        }
+        if(pendingDeathTp&&now>=deathTpAt&&!dead){
+            pendingDeathTp=false;
+            String c=deathCmd();
+            say(c);LOGGER.info("Death teleport: {}",c);
+            if(cfg.pauseOnDeath)armTimer();
+        }
         prevDead=dead;
     }
     private void tickJoinCommands(long now){if(cfg.joinCommands==null||cfg.joinCommands.isEmpty())return;if(joinCmdIdx>=cfg.joinCommands.size()||mc().player==null)return;if(nav!=Nav.IDLE||now<nextJoinCmdAt)return;String cmd=cfg.joinCommands.get(joinCmdIdx++);if(!cmd.isBlank()){say(cmd);LOGGER.info("Join cmd: {}",cmd);}nextJoinCmdAt=now+Math.max(500,cfg.joinCommandDelayMs);}
@@ -758,6 +790,7 @@ public class MoggSyncClient implements ClientModInitializer {
     // ------------------------------------------------------------------ чат
 
     private void onChat(String raw) {
+        if (raw != null) checkLoginTrigger(raw);
         if (!isActive() || raw == null) return;
         long now = System.currentTimeMillis();
         if (raw.equals(lastMsg) && now - lastMsgAt < 500) return;

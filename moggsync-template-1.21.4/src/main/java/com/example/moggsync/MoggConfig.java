@@ -30,9 +30,10 @@ public class MoggConfig {
     public boolean forwardPm = false;
     public String pmPattern = " -> ";
 
+    public boolean loginOnJoin = true;             // запасной авто-ввод пароля после входа, если подсказки нет
     public boolean autoLogin = false;              // авто-ввод пароля при LOGIN-экране
     public int loginDelayMs = 1500;
-    public List<String> loginTriggers = List.of("напишите пароль в чат", "login");
+    public List<String> loginTriggers = List.of("напишите пароль в чат", "введите пароль", "/login", "/l ", "авторизуйтесь", "login");
     public String activeAccounts = "";                 // ники через запятую, на которых мод работает. Пусто = на любом аккаунте
 
     // --- Напарник (задаётся в игре: .moggsynk Ник) ---
@@ -96,7 +97,7 @@ public class MoggConfig {
     public String TELEGRAM_BOT_TOKEN = "";
     public String CHAT_ID = "";
     public String tgChatMode = "MENTIONS";              // какой игровой чат слать в Telegram: OFF | MENTIONS (про меня/напарника) | ALL
-    public boolean tgControl = false;                  // управление игрой из Telegram (нужен свой бот на каждом ПК)
+    public boolean tgControl = true;                   // управление игрой из Telegram (нужен свой бот на каждом ПК)
     public int autoScreenshotMinutes = 30;
 
     // --- Смерть и возрождение ---
@@ -139,7 +140,7 @@ public class MoggConfig {
         return c;
     }
 
-    private static final int CURRENT_VERSION = 7;
+    private static final int CURRENT_VERSION = 8;
 
     /** Старые конфиги: сервер пишет «станцевали» (мн. число), а фраза приглашения — «я тебя могну». */
     private static void migrate(MoggConfig c) {
@@ -149,7 +150,11 @@ public class MoggConfig {
                 c.readyPhrase = "я тебя могну";
         }
         if (c.configVersion < 4 && c.menuClickDelayMs <= 500) c.menuClickDelayMs = 2000;
-        // v5: no structural changes
+        if (c.configVersion < 8) {
+            c.tgControl = true;
+            c.loginOnJoin = true;
+            c.loginTriggers = new ArrayList<>(List.of("напишите пароль в чат", "введите пароль", "/login", "/l ", "авторизуйтесь", "login"));
+        }
         c.configVersion = CURRENT_VERSION;
     }
 
