@@ -80,23 +80,35 @@ public final class TelegramReporter {
 
     public static void linkChat(MoggConfig c, BiConsumer<String,String> cb) {
         if (c.TELEGRAM_BOT_TOKEN.isBlank()) { cb.accept(null,"Сначала: .moggsynk tg ТОКЕН"); return; }
+        final String base = "https://api.telegram.org/bot" + c.TELEGRAM_BOT_TOKEN.strip();
         HttpRequest req = HttpRequest.newBuilder()
-                .uri(URI.create("https://api.telegram.org/bot"+c.TELEGRAM_BOT_TOKEN+"/getUpdates"))
+                .uri(URI.create(base + "/getUpdates?timeout=0&allowed_updates=%5B%22message%22%2C%22edited_message%22%2C%22channel_post%22%2C%22my_chat_member%22%5D"))
                 .timeout(Duration.ofSeconds(20)).GET().build();
         HTTP.sendAsync(req,HttpResponse.BodyHandlers.ofString())
             .thenAccept(r -> {
-                if (r.statusCode()==401||r.statusCode()==404) { cb.accept(null,"Токен не подходит"); return; }
+                if (r.statusCode()==401||r.statusCode()==404) { cb.accept(null,"Токен не подходит (проверь, что скопирован целиком)"); return; }
+                if (r.statusCode()==409) {
+                    try { HTTP.send(HttpRequest.newBuilder().uri(URI.create(base + "/deleteWebhook")).timeout(Duration.ofSeconds(15)).GET().build(), HttpResponse.BodyHandlers.discarding()); } catch (Exception ignored) {}
+                    cb.accept(null,"Бот занят (webhook или другой ПК опрашивает его). Webhook сброшен — напиши боту /start ещё раз и повтори .moggsynk tglink");
+                    return;
+                }
                 if (r.statusCode()!=200) { cb.accept(null,"Telegram ответил "+r.statusCode()); return; }
                 try {
                     JsonArray arr = JsonParser.parseString(r.body()).getAsJsonObject().getAsJsonArray("result");
                     for (int i=arr.size()-1;i>=0;i--) {
                         JsonObject u=arr.get(i).getAsJsonObject();
-                        if (u.has("message")&&u.getAsJsonObject("message").has("chat")) {
-                            cb.accept(u.getAsJsonObject("message").getAsJsonObject("chat").get("id").getAsString(),null);
+                        for (String key : new String[]{"message","edited_message","channel_post"}) {
+                            if (u.has(key)&&u.getAsJsonObject(key).has("chat")) {
+                                cb.accept(u.getAsJsonObject(key).getAsJsonObject("chat").get("id").getAsString(),null);
+                                return;
+                            }
+                        }
+                        if (u.has("my_chat_member")&&u.getAsJsonObject("my_chat_member").has("chat")) {
+                            cb.accept(u.getAsJsonObject("my_chat_member").getAsJsonObject("chat").get("id").getAsString(),null);
                             return;
                         }
                     }
-                    cb.accept(null,"Бот пока не получил сообщений. Напиши ему /start в Telegram и введи .moggsynk tglink");
+                    cb.accept(null,"Бот пока не получил сообщений. Открой именно ЭТОГО бота (того, чей токен), нажми Start / напиши /start и через пару секунд введи .moggsynk tglink. Либо задай вручную: .moggsynk chatid ТВОЙ_ID");
                 } catch (Exception e) { cb.accept(null,"Не удалось разобрать ответ Telegram"); }
             })
             .exceptionally(t->{ cb.accept(null,"Нет связи ("+t.getClass().getSimpleName()+")"); return null; });

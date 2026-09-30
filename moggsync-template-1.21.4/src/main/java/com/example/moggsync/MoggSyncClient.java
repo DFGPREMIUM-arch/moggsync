@@ -79,6 +79,9 @@ public class MoggSyncClient implements ClientModInitializer {
 
     // переподключение
     private ServerInfo lastServer;
+    private String lastServerAddress = "";
+    private boolean joinedOnce;
+    private int otherScreenTicks;
     private boolean reconnectPending, reconnectAnnounced;
     private long reconnectAt;
     private int reconnectTries;
@@ -293,6 +296,7 @@ public class MoggSyncClient implements ClientModInitializer {
                 info(".moggsynk now  — начать синхронизацию прямо сейчас");
                 info(".moggsynk tg <токен>  — подключить Telegram-бота");
                 info(".moggsynk tglink  — найти chat_id (после /start боту)");
+                info(".moggsynk chatid 123456  — задать chat_id вручную");
                 info(".moggsynk tgtest / shot / status");
                 info(".moggsynk phrase я тебя могну  — фраза, которой вы приглашаете напарника");
                 info(".moggsynk gui  — окно настроек (или клавиша [)");
@@ -403,13 +407,21 @@ public class MoggSyncClient implements ClientModInitializer {
             }
             case "tg" -> {
                 if (rest.isBlank()) { info("Использование: .moggsynk tg ТОКЕН_ОТ_BOTFATHER"); return; }
-                cfg.TELEGRAM_BOT_TOKEN = rest;
+                cfg.TELEGRAM_BOT_TOKEN = rest.strip();
+                cfg.CHAT_ID = "";                       // новый бот — старый chat_id не подходит
                 cfg.telegramEnabled = true;
                 MoggConfig.save(cfg);
                 info("Токен сохранён. Теперь напиши своему боту /start в Telegram, потом введи .moggsynk tglink");
                 linkTelegram();
             }
             case "tglink" -> linkTelegram();
+            case "chatid" -> {
+                if (rest.isBlank()) { info("Использование: .moggsynk chatid 123456789"); return; }
+                cfg.CHAT_ID = rest.strip();
+                MoggConfig.save(cfg);
+                info("chat_id сохранён");
+                TelegramReporter.sendMessage(cfg, "✅ MoggSync подключён к этому чату (" + myName() + ")");
+            }
             case "tgtest" -> {
                 if (!TelegramReporter.ready(cfg)) { info("Telegram не настроен (нужны токен и chat_id)"); return; }
                 TelegramReporter.sendMessage(cfg, "✅ MoggSync: тестовое сообщение (" + myName() + ")");
@@ -437,7 +449,9 @@ public class MoggSyncClient implements ClientModInitializer {
     }
 
     void linkTelegram() {
+        TelegramBridge.linking = true;                  // на время поиска chat_id фоновый опрос не трогает сообщения
         TelegramReporter.linkChat(cfg, (chatId, err) -> mc().execute(() -> {
+            TelegramBridge.linking = false;
             if (chatId != null) {
                 cfg.CHAT_ID = chatId;
                 MoggConfig.save(cfg);
@@ -456,7 +470,10 @@ public class MoggSyncClient implements ClientModInitializer {
     // ------------------------------------------------------------------ соединение
 
     private void onJoin(MinecraftClient client) {
-        lastServer = client.getCurrentServerEntry();      // null в одиночной игре
+        ServerInfo cur = client.getCurrentServerEntry();   // null в одиночной игре
+        if (cur != null) { lastServer = cur; lastServerAddress = cur.address; }
+        joinedOnce = true;
+        otherScreenTicks = 0;
         reconnectPending = false;
         reconnectAnnounced = false;
         reconnectTries = 0;
@@ -504,9 +521,13 @@ public class MoggSyncClient implements ClientModInitializer {
         ritual = Ritual.IDLE;
         pendingPhraseAt = 0;
         if (nav != Nav.WAIT_TRANSFER) nav = Nav.IDLE;
-        if (isActive() && cfg.autoReconnect && lastServer != null) {
+        if (isActive() && cfg.autoReconnect && (lastServer != null || !lastServerAddress.isBlank())) {
             reconnectPending = true;
+            otherScreenTicks = 0;
             reconnectAt = System.currentTimeMillis() + cfg.reconnectDelaySeconds * 1000L;
+            LOGGER.info("Disconnected, reconnect in {} s", cfg.reconnectDelaySeconds);
+        } else {
+            LOGGER.info("Disconnected, reconnect NOT armed: active={} autoReconnect={} server={}", isActive(), cfg.autoReconnect, lastServerAddress);
         }
     }
 
@@ -553,16 +574,27 @@ public class MoggSyncClient implements ClientModInitializer {
     private void tickSession(long now){if(!cfg.sessionReportAtMidnight||!TelegramReporter.ready(cfg))return;if(midnightAt==0){midnightAt=now+60_000;return;}if(now<midnightAt)return;midnightAt=now+60_000;java.time.LocalTime lt=java.time.LocalTime.now();if(lt.getHour()==0&&lt.getMinute()==0){long dur=(now-sessionStart)/60_000;TelegramReporter.sendHtml(cfg,"<b>📊 Итог дня</b>\n👤 <code>"+escHtml(myName())+"</code>\n🏆 Ритуалов: <b>"+sessionRituals+"</b>\n💰 Рилликов: <b>"+sessionRilliki+"</b>\n⏱ Сессия: <b>"+dur/60+" ч "+dur%60+" мин</b>");sessionRituals=0;sessionRilliki=0;sessionStart=now;}}
     private static String fmtN(long n){if(n>=1_000_000)return String.format("%.1fм",n/1_000_000.0);if(n>=1000)return String.format("%.1fк",n/1000.0);return String.valueOf(n);}
     private void onHudRender(DrawContext ctx){if(!cfg.showHud||mc().player==null||mc().currentScreen!=null)return;var tr=mc().textRenderer;var win=mc().getWindow();boolean on=isEnabled();String l1="MoggSync "+(on?"●":"○"),l2=timerText();if(l2.length()>24)l2=l2.substring(0,24);String l3=sessionRituals+" rit • "+fmtN(totalRilliki);int tw=Math.max(tr.getWidth(l1),Math.max(tr.getWidth(l2),tr.getWidth(l3)));int bw=tw+10,bh=34,bx=cfg.hudRight?win.getScaledWidth()-bw-cfg.hudX:cfg.hudX,by=cfg.hudBottom?win.getScaledHeight()-bh-cfg.hudY:cfg.hudY;ctx.fill(bx-1,by-1,bx+bw+1,by+bh+1,0xBB000000);ctx.fill(bx-1,by-1,bx+1,by+bh+1,on?0xFF2FBF71:0xFFD64545);ctx.drawText(tr,l1,bx+3,by+2,on?0xFFAAFFCC:0xFFFF9999,true);ctx.drawText(tr,l2,bx+3,by+12,0xFF9999FF,false);ctx.drawText(tr,l3,bx+3,by+22,0xFFFFCC66,false);}
-    /** Если нас выкинуло (рестарт, кик, обрыв) — заходим снова. Ручной выход из мира не считается. */
+    /** Если нас выкинуло (рестарт, кик, обрыв прокси) — заходим снова. Ручной выход из мира не считается. */
     private void tickReconnect(MinecraftClient mc) {
-        if (!reconnectPending) return;
-        if (!isActive()) { reconnectPending = false; return; }
+        Screen s = mc.currentScreen;
         long now = System.currentTimeMillis();
+        // страховка: экран отключения есть, а событие отключения не сработало (обрыв на этапе входа/прокси)
+        if (!reconnectPending) {
+            if (joinedOnce && mc.world == null && s instanceof DisconnectedScreen && isActive() && cfg.autoReconnect
+                    && (lastServer != null || !lastServerAddress.isBlank())) {
+                reconnectPending = true;
+                otherScreenTicks = 0;
+                reconnectAt = now + cfg.reconnectDelaySeconds * 1000L;
+                LOGGER.info("Disconnect screen without event, reconnect armed");
+            }
+            return;
+        }
+        if (!isActive()) { reconnectPending = false; return; }
         if (now < reconnectAt) return;
         if (mc.world != null) { reconnectPending = false; return; }
 
-        Screen s = mc.currentScreen;
         if (s instanceof DisconnectedScreen) {
+            otherScreenTicks = 0;
             if (!reconnectAnnounced) {
                 reconnectAnnounced = true;
                 TelegramReporter.sendMessage(cfg, "⚠️ MoggSync: соединение потеряно, переподключаюсь...");
@@ -572,13 +604,25 @@ public class MoggSyncClient implements ClientModInitializer {
                 TelegramReporter.sendMessage(cfg, "❌ MoggSync: не удалось переподключиться за " + cfg.maxReconnectAttempts + " попыток.");
                 return;
             }
-            LOGGER.info("Reconnecting to {}", lastServer.address);
-            ConnectScreen.connect(new TitleScreen(), mc, ServerAddress.parse(lastServer.address), lastServer, false, null);
+            try {
+                ServerInfo si = lastServer;
+                String addr = si != null ? si.address : lastServerAddress;
+                if (si == null) si = new ServerInfo("MoggSync", addr, ServerInfo.ServerType.OTHER);
+                LOGGER.info("Reconnecting to {}", addr);
+                ConnectScreen.connect(new TitleScreen(), mc, ServerAddress.parse(addr), si, false, null);
+            } catch (Exception e) {
+                LOGGER.warn("Reconnect failed: {}", e.toString());
+            }
             reconnectAt = now + cfg.reconnectDelaySeconds * 1000L;
         } else if (s instanceof ConnectScreen) {
             reconnectAt = now + 2000;                      // подключаемся, ждём
+        } else if (s instanceof TitleScreen || s instanceof net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen) {
+            reconnectPending = false;                      // игрок сам вышел в меню
+            LOGGER.info("Reconnect cancelled: player is in menu");
         } else {
-            reconnectPending = false;                      // игрок вышел сам
+            // прочие экраны (загрузка, null и т.п.) — не сдаёмся сразу, даём время
+            reconnectAt = now + 1000;
+            if (++otherScreenTicks > 60) { reconnectPending = false; LOGGER.info("Reconnect cancelled: unexpected screen {}", s); }
         }
     }
 

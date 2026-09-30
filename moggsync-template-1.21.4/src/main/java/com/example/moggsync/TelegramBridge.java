@@ -20,6 +20,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public final class TelegramBridge {
     private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
+    static volatile boolean linking = false;
     private final MoggSyncClient mod;
     private final Queue<String> incoming = new ConcurrentLinkedQueue<>();
     private volatile boolean running = true;
@@ -41,7 +42,7 @@ public final class TelegramBridge {
         while (running) {
             try {
                 MoggConfig c = mod.cfg();
-                if (!c.tgControl || !TelegramReporter.ready(c) || !mod.accountAllowed()) {
+                if (linking || !c.tgControl || !TelegramReporter.ready(c) || !mod.accountAllowed()) {
                     first = true;
                     Thread.sleep(2000);
                     continue;
